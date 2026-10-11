@@ -4,3 +4,4 @@ __pycache__/
 .sys3grabber.ordered
 config.dryrun.json
 ovh.env
+watch.log
