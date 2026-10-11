@@ -142,11 +142,25 @@ def fetch_availability(api, cfg):
 
 
 # --------------------------------------------------------------- notify
-def _post(url, payload=None, raw=None, headers=None):
+def _post(url, payload=None, raw=None, headers=None, method="POST"):
     data = raw if raw is not None else json.dumps(payload).encode()
     h = {"Content-Type": "application/json"}
     h.update(headers or {})
-    urllib.request.urlopen(urllib.request.Request(url, data=data, headers=h), timeout=15).read()
+    urllib.request.urlopen(urllib.request.Request(url, data=data, headers=h, method=method),
+                           timeout=15).read()
+
+
+def _matrix_send(c, message):
+    # Matrix client-server API. Token from env MATRIX_TOKEN (preferred) or config.
+    token = os.environ.get("MATRIX_TOKEN") or c.get("token")
+    if not token:
+        raise RuntimeError("no token (set MATRIX_TOKEN env or notify.matrix.token)")
+    hs = c["homeserver"].rstrip("/")
+    room = urllib.parse.quote(c["room_id"])
+    txn = str(int(time.time() * 1000))
+    _post(f"{hs}/_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}",
+          {"msgtype": "m.text", "body": message},
+          headers={"Authorization": f"Bearer {token}"}, method="PUT")
 
 
 def notify(cfg, message):
@@ -158,6 +172,7 @@ def notify(cfg, message):
         ("discord", lambda c: _post(c["webhook_url"], {"content": message})),
         ("telegram", lambda c: _post(f"https://api.telegram.org/bot{c['bot_token']}/sendMessage",
                                      {"chat_id": c["chat_id"], "text": message})),
+        ("matrix", lambda c: _matrix_send(c, message)),
     ):
         if n.get(name):
             try:

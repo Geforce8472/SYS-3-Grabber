@@ -71,6 +71,30 @@ def test_plan_code_filter_narrows_server_feed():
     assert [h[3]["planCode"] for h in hits] == ["24sys032-v1"]
 
 
+def test_matrix_notifier(monkeypatch=None):
+    import os
+    os.environ.pop("MATRIX_TOKEN", None)
+    try:
+        g._matrix_send({"homeserver": "http://h:8008", "room_id": "!r:h"}, "x")
+        assert False, "expected missing-token error"
+    except RuntimeError as e:
+        assert "token" in str(e)
+    calls = []
+    orig = g._post
+    g._post = lambda url, payload=None, raw=None, headers=None, method="POST": calls.append((method, url, payload, headers))
+    try:
+        os.environ["MATRIX_TOKEN"] = "tok"
+        g._matrix_send({"homeserver": "http://h:8008/", "room_id": "!a:h"}, "up")
+    finally:
+        g._post = orig
+        os.environ.pop("MATRIX_TOKEN", None)
+    method, url, payload, headers = calls[0]
+    assert method == "PUT"
+    assert payload == {"msgtype": "m.text", "body": "up"}
+    assert headers["Authorization"] == "Bearer tok"
+    assert "/_matrix/client/v3/rooms/%21a%3Ah/send/m.room.message/" in url
+
+
 def test_order_lock():
     import tempfile
     with tempfile.TemporaryDirectory() as d:

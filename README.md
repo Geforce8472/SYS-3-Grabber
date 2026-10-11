@@ -49,9 +49,21 @@ matches a known delivery-window value (`1H-high`, `24H`, `72H`, ...). Any unexpe
 is treated as *not* available, so it can never trigger an auto-order. Pin exact values with the
 `available_values` config key if OVH's reported values differ.
 
+## Notifications
+`notify` may hold any of `ntfy`, `discord`, `telegram`, `matrix` (all fire if present); messages also
+always print to stdout. Matrix sends to a room via the client-server API:
+
+    "notify": {"matrix": {"homeserver": "http://localhost:8008", "room_id": "!abcdef:your.server"}}
+
+The access token comes from the `MATRIX_TOKEN` env var (preferred, keeps it out of files) or
+`notify.matrix.token`. Get a token by logging a (bot) user in once:
+
+    curl -XPOST http://localhost:8008/_matrix/client/v3/login \
+      -d '{"type":"m.login.password","user":"grabber","password":"..."}'
+
 ## Caveats
-- Written without live access to OVH's API (the build sandbox blocked it), so it is untested against the
-  real endpoints. Verify with `find`, `check` and `order --dry-run` first; option/addon matching in
-  `pick_options` may need `option_keywords` tweaks (e.g. `["bandwidth-1000", "vrack-bandwidth-500"]`).
+- The order/cart path was validated against the live OVH API via `order --dry-run`; still run a
+  `--dry-run` for your own target first, as option/addon matching in `pick_options` may need
+  `option_keywords` tweaks (e.g. `["bandwidth-1000", "vrack-bandwidth-500"]`).
 - Datacenter code for Erith is `lon`; adjust `datacenters` if the API reports differently.
 - OVH eco-range stock often sells out within seconds; keep `poll_seconds` modest (10–30) to be polite.
