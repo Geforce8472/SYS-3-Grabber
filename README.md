@@ -21,6 +21,18 @@ Safety: `max_price` (incl. tax) aborts the order if the cart is dearer. `--order
 default payment method and waives the withdrawal period, so it creates a binding contract.
 Always run a `--dry-run` first and check the printed options/total.
 
+Once a real checkout is attempted, the tool writes a lock file (`.sys3grabber.ordered`, path
+configurable via `order_lock`) **before** sending the request and then refuses any further order
+until you delete it. This is deliberate: if a checkout request times out, the order may still have
+gone through, so the tool stops rather than risk buying the server twice. `watch --order` likewise
+makes at most one checkout attempt per run and never loops back to re-order. If an attempt is
+interrupted, check your OVH account first, then remove the lock file to allow another.
+
+In-stock detection is an allowlist: a datacenter is treated as orderable only when its availability
+matches a known delivery-window value (`1H-high`, `24H`, `72H`, ...). Any unexpected or new status
+is treated as *not* available, so it can never trigger an auto-order. Pin exact values with the
+`available_values` config key if OVH's reported values differ.
+
 ## Caveats
 - Written without live access to OVH's API (the build sandbox blocked it), so it is untested against the
   real endpoints. Verify with `find`, `check` and `order --dry-run` first; option/addon matching in

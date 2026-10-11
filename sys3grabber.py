@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -23,7 +24,24 @@ API = {
     "ovh-eu": "https://eu.api.ovh.com/v1",
     "ovh-ca": "https://ca.api.ovh.com/v1",
 }
-UNAVAILABLE = {"unavailable", "comingSoon"}
+# In-stock decision is an ALLOWLIST, not a denylist: a datacenter counts as
+# orderable only if its availability matches a known delivery-window shape
+# ("1H-high", "24H", "72H", "480H", ... optionally a "-high"/"-low" tier, or a
+# bare "high"/"low"). Any other value -- "unavailable", "comingSoon", "unknown",
+# null, or a status OVH adds in future -- is treated as NOT available, so an
+# unexpected status can never trigger an auto-order. Override with the config
+# key "available_values" (an explicit list of exact, case-insensitive values).
+IN_STOCK_RE = re.compile(r"^\d+h(-(?:high|low))?$|^(?:high|low)$")
+
+
+def is_available(availability, cfg=None):
+    s = (availability or "").strip().lower()
+    if not s:
+        return False
+    allow = (cfg or {}).get("available_values")
+    if allow:
+        return s in {str(v).strip().lower() for v in allow}
+    return bool(IN_STOCK_RE.match(s))
 
 
 # ---------------------------------------------------------------- config
@@ -42,6 +60,7 @@ def load_config(path):
     cfg.setdefault("option_keywords", [])
     cfg.setdefault("notify", {})
     cfg.setdefault("max_price", None)
+    cfg.setdefault("order_lock", ".sys3grabber.ordered")
     if not cfg.get("plan_code"):
         sys.exit("config: plan_code is required (use the `find` command)")
     return cfg
@@ -99,7 +118,7 @@ def find_available(rows, cfg):
         if cfg["storage_contains"].lower() not in (row.get("storage") or fqn).lower():
             continue
         for dc in row.get("datacenters", []):
-            if dc["datacenter"] in cfg["datacenters"] and dc["availability"] not in UNAVAILABLE:
+            if dc["datacenter"] in cfg["datacenters"] and is_available(dc.get("availability"), cfg):
                 hits.append((fqn, dc["datacenter"], dc["availability"], row))
     return hits
 
@@ -135,6 +154,21 @@ def notify(cfg, message):
 
 
 # ----------------------------------------------------------------- order
+def _order_lock_path(cfg):
+    return cfg.get("order_lock") or ".sys3grabber.ordered"
+
+
+def check_order_lock(cfg):
+    """Raise if a real order has already been attempted in a previous run/poll."""
+    lock = _order_lock_path(cfg)
+    if os.path.exists(lock):
+        with open(lock) as f:
+            prev = f.read().strip()
+        raise RuntimeError(
+            f"order lock {lock!r} exists -- an order was already attempted "
+            f"({prev}). Check your OVH account; delete this file to allow another order.")
+
+
 def pick_options(api, cfg, fqn):
     """Work out the addon plan codes (ram, storage, bandwidth, ...) to add to the cart."""
     cat = api.request("GET", "/order/catalog/public/eco",
@@ -159,6 +193,9 @@ def pick_options(api, cfg, fqn):
 
 
 def place_order(api, cfg, fqn, datacenter, dry_run=True):
+    # Refuse before building anything if we've already attempted a real order.
+    if not dry_run:
+        check_order_lock(cfg)
     options = pick_options(api, cfg, fqn)
     print("options:", ", ".join(f"{n}={c}" for n, c in options))
     cart = api.request("POST", "/order/cart", body={"ovhSubsidiary": cfg["subsidiary"]})
@@ -184,8 +221,18 @@ def place_order(api, cfg, fqn, datacenter, dry_run=True):
     if dry_run:
         print("dry run: cart built and priced, NOT checked out.")
         return cid
+    # Write the lock BEFORE the checkout request. If the request succeeds but the
+    # response is lost (timeout/crash), the order may still have gone through, so
+    # the next attempt must find the lock and refuse rather than buy a second time.
+    lock = _order_lock_path(cfg)
+    with open(lock, "w") as f:
+        json.dump({"status": "attempting", "cartId": cid, "fqn": fqn,
+                   "datacenter": datacenter, "ts": int(time.time())}, f)
     result = api.request("POST", f"/order/cart/{cid}/checkout", body={
         "autoPayWithPreferredPaymentMethod": True, "waiveRetractationPeriod": True})
+    with open(lock, "w") as f:
+        json.dump({"status": "placed", "cartId": cid, "fqn": fqn,
+                   "ts": int(time.time()), "result": result}, f)
     print("ORDER PLACED:", json.dumps(result))
     return result
 
@@ -215,6 +262,8 @@ def cmd_check(args):
 def cmd_watch(args):
     cfg = load_config(args.config)
     api = client_from_env(cfg)
+    if args.order:
+        check_order_lock(cfg)  # fail fast rather than poll then refuse
     print(f"watching {cfg['plan_code']} in {cfg['datacenters']} every {cfg['poll_seconds']}s "
           f"(auto-order: {'ON' if args.order else 'off'})", flush=True)
     while True:
@@ -227,12 +276,16 @@ def cmd_watch(args):
             fqn, dc, av, _ = hits[0]
             notify(cfg, f"SYS-3 IN STOCK: {fqn} @ {dc} ({av})")
             if args.order:
+                # One checkout attempt per run, full stop. Whether it succeeds or
+                # raises, we never loop back and risk ordering the server twice;
+                # the lock file also blocks a re-order across restarts.
                 try:
                     place_order(api, cfg, fqn, dc, dry_run=False)
                     notify(cfg, "Order placed - check your OVH account to pay/confirm.")
                     return 0
                 except Exception as e:
-                    notify(cfg, f"Order FAILED: {e}")
+                    notify(cfg, f"Order attempt stopped (NOT retrying): {e}")
+                    return 1
             else:
                 return 0
         time.sleep(cfg["poll_seconds"])
@@ -245,7 +298,10 @@ def cmd_order(args):
     if not hits:
         sys.exit("not in stock right now")
     fqn, dc, _, _ = hits[0]
-    place_order(api, cfg, fqn, dc, dry_run=args.dry_run)
+    try:
+        place_order(api, cfg, fqn, dc, dry_run=args.dry_run)
+    except RuntimeError as e:
+        sys.exit(str(e))
 
 
 def main():
