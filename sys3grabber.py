@@ -335,17 +335,19 @@ def cmd_order(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+    # -c/--config on a shared parent so it works before OR after the subcommand.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("-c", "--config", default="config.json")
+    ap = argparse.ArgumentParser(description=__doc__, parents=[common],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("-c", "--config", default="config.json")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    f = sub.add_parser("find"); f.add_argument("query"); f.add_argument("--subsidiary", default="GB")
-    f.set_defaults(fn=cmd_find)
-    sub.add_parser("check").set_defaults(fn=cmd_check)
-    w = sub.add_parser("watch")
+    f = sub.add_parser("find", parents=[common]); f.add_argument("query")
+    f.add_argument("--subsidiary", default="GB"); f.set_defaults(fn=cmd_find)
+    sub.add_parser("check", parents=[common]).set_defaults(fn=cmd_check)
+    w = sub.add_parser("watch", parents=[common])
     w.add_argument("--order", action="store_true", help="auto-order when in stock")
     w.set_defaults(fn=cmd_watch)
-    o = sub.add_parser("order"); o.add_argument("--dry-run", action="store_true")
+    o = sub.add_parser("order", parents=[common]); o.add_argument("--dry-run", action="store_true")
     o.set_defaults(fn=cmd_order)
     args = ap.parse_args()
     sys.exit(args.fn(args) or 0)
