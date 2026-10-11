@@ -9,6 +9,22 @@ Python 3.8+, no dependencies.
 2. `python3 sys3grabber.py check` – one-off stock check.
 3. `python3 sys3grabber.py watch` – poll and notify. Run it somewhere always-on (VPS, Pi, `tmux`).
 
+### `server` vs `plan_code` (important for SSD configs)
+OVH's availability API returns *more* storage configs when queried by the box's hardware ref
+(`server`, e.g. `24sys03`) than by a single `plan_code` (e.g. `24sys03-v1`). In particular the
+hardware-RAID SSD config (`hardraid-4x960ssd`) only shows up under the `server` query, and it lives
+under a *different* plan code (`24sys032-v1`). So:
+
+- Set `server` to watch every storage config for the box (recommended). Leave `plan_code` unset to
+  match any of them, or set it to narrow to one plan (e.g. `24sys032-v1` for the SSD variants).
+- Set only `plan_code` for the old, narrow behaviour (that plan's configs only).
+- `memory_contains` / `storage_contains` then pick the exact config, e.g. `"32g"` + `"960ssd"` for
+  32 GB with 4×960 GB SATA SSD. When an order fires, it uses the plan code of the matched row, so
+  mixed-plan `server` feeds order the right product automatically.
+
+To find a box's `server` ref, run `check` with any config and look at an `fqn` (`<plan>.<ram>.<storage>`),
+or query `/dedicated/server/datacenter/availabilities` – the `server` field is the ref.
+
 ## Auto-order (optional)
 Create API credentials at https://eu.api.ovh.com/createToken/ with rights `GET/POST/DELETE /order/*`
 and `GET /me/*`, then:

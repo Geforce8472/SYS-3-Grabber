@@ -50,6 +50,8 @@ def load_config(path):
         cfg = json.load(f)
     cfg.setdefault("endpoint", "ovh-eu")
     cfg.setdefault("subsidiary", "GB")
+    cfg.setdefault("server", None)      # hardware ref, e.g. "24sys03" (see below)
+    cfg.setdefault("plan_code", None)   # optional filter / order code, e.g. "24sys032-v1"
     cfg.setdefault("datacenters", ["lon"])  # Erith, UK is reported as "lon"
     cfg.setdefault("memory_contains", "32g")
     cfg.setdefault("storage_contains", "960")
@@ -61,8 +63,10 @@ def load_config(path):
     cfg.setdefault("notify", {})
     cfg.setdefault("max_price", None)
     cfg.setdefault("order_lock", ".sys3grabber.ordered")
-    if not cfg.get("plan_code"):
-        sys.exit("config: plan_code is required (use the `find` command)")
+    if not cfg.get("plan_code") and not cfg.get("server"):
+        sys.exit("config: set 'server' (e.g. 24sys03) or 'plan_code' (use the `find` "
+                 "command). 'server' sees every storage config incl. hardware-RAID SSD; "
+                 "'plan_code' alone only sees that one plan's configs.")
     return cfg
 
 
@@ -113,6 +117,10 @@ def find_available(rows, cfg):
     hits = []
     for row in rows:
         fqn = row.get("fqn", "")
+        # In server mode the feed carries several plan codes (e.g. 24sys03-v1 and
+        # the SSD-bearing 24sys032-v1); if plan_code is set, narrow to it.
+        if cfg.get("plan_code") and row.get("planCode") and row["planCode"] != cfg["plan_code"]:
+            continue
         if cfg["memory_contains"].lower() not in (row.get("memory") or fqn).lower():
             continue
         if cfg["storage_contains"].lower() not in (row.get("storage") or fqn).lower():
@@ -124,8 +132,12 @@ def find_available(rows, cfg):
 
 
 def fetch_availability(api, cfg):
+    # Query by hardware ref ("server") when given: it returns every storage
+    # config for the box, including hardware-RAID SSD, which the planCode-only
+    # query omits. Fall back to planCode for the narrow/legacy behaviour.
+    params = {"server": cfg["server"]} if cfg.get("server") else {"planCode": cfg["plan_code"]}
     return api.request("GET", "/dedicated/server/datacenter/availabilities",
-                       params={"planCode": cfg["plan_code"]}, auth=False)
+                       params=params, auth=False)
 
 
 # --------------------------------------------------------------- notify
@@ -169,13 +181,13 @@ def check_order_lock(cfg):
             f"({prev}). Check your OVH account; delete this file to allow another order.")
 
 
-def pick_options(api, cfg, fqn):
+def pick_options(api, cfg, fqn, plan_code):
     """Work out the addon plan codes (ram, storage, bandwidth, ...) to add to the cart."""
     cat = api.request("GET", "/order/catalog/public/eco",
                       params={"ovhSubsidiary": cfg["subsidiary"]}, auth=False)
-    plan = next((p for p in cat["plans"] if p["planCode"] == cfg["plan_code"]), None)
+    plan = next((p for p in cat["plans"] if p["planCode"] == plan_code), None)
     if not plan:
-        raise RuntimeError(f"plan {cfg['plan_code']} not in {cfg['subsidiary']} catalog")
+        raise RuntimeError(f"plan {plan_code} not in {cfg['subsidiary']} catalog")
     addons = plan.get("addonFamilies", [])
     # fqn looks like <plan>.<ram>.<storage>; those two addon codes are explicit.
     wanted = fqn.split(".")[1:]
@@ -192,17 +204,24 @@ def pick_options(api, cfg, fqn):
     return chosen
 
 
-def place_order(api, cfg, fqn, datacenter, dry_run=True):
+def place_order(api, cfg, fqn, datacenter, plan_code=None, dry_run=True):
+    # Order the exact config that came into stock: its plan code is on the
+    # matched row and may differ from any single configured plan_code (e.g. the
+    # SSD config is 24sys032-v1 while the box's hardware ref is 24sys03).
+    plan_code = plan_code or cfg.get("plan_code")
+    if not plan_code:
+        raise RuntimeError("no plan_code for this config; cannot order")
     # Refuse before building anything if we've already attempted a real order.
     if not dry_run:
         check_order_lock(cfg)
-    options = pick_options(api, cfg, fqn)
+    options = pick_options(api, cfg, fqn, plan_code)
+    print(f"ordering plan {plan_code} ({fqn}) @ {datacenter}")
     print("options:", ", ".join(f"{n}={c}" for n, c in options))
     cart = api.request("POST", "/order/cart", body={"ovhSubsidiary": cfg["subsidiary"]})
     cid = cart["cartId"]
     api.request("POST", f"/order/cart/{cid}/assign")
     item = api.request("POST", f"/order/cart/{cid}/eco", body={
-        "planCode": cfg["plan_code"], "duration": cfg["duration"],
+        "planCode": plan_code, "duration": cfg["duration"],
         "pricingMode": "default", "quantity": 1})
     iid = item["itemId"]
     for label, value in (("dedicated_datacenter", datacenter),
@@ -264,7 +283,8 @@ def cmd_watch(args):
     api = client_from_env(cfg)
     if args.order:
         check_order_lock(cfg)  # fail fast rather than poll then refuse
-    print(f"watching {cfg['plan_code']} in {cfg['datacenters']} every {cfg['poll_seconds']}s "
+    target = cfg.get("server") or cfg.get("plan_code")
+    print(f"watching {target} in {cfg['datacenters']} every {cfg['poll_seconds']}s "
           f"(auto-order: {'ON' if args.order else 'off'})", flush=True)
     while True:
         try:
@@ -273,14 +293,14 @@ def cmd_watch(args):
             print(f"poll error: {e}", file=sys.stderr)
             hits = []
         if hits:
-            fqn, dc, av, _ = hits[0]
+            fqn, dc, av, row = hits[0]
             notify(cfg, f"SYS-3 IN STOCK: {fqn} @ {dc} ({av})")
             if args.order:
                 # One checkout attempt per run, full stop. Whether it succeeds or
                 # raises, we never loop back and risk ordering the server twice;
                 # the lock file also blocks a re-order across restarts.
                 try:
-                    place_order(api, cfg, fqn, dc, dry_run=False)
+                    place_order(api, cfg, fqn, dc, plan_code=row.get("planCode"), dry_run=False)
                     notify(cfg, "Order placed - check your OVH account to pay/confirm.")
                     return 0
                 except Exception as e:
@@ -297,9 +317,9 @@ def cmd_order(args):
     hits = find_available(fetch_availability(api, cfg), cfg)
     if not hits:
         sys.exit("not in stock right now")
-    fqn, dc, _, _ = hits[0]
+    fqn, dc, _, row = hits[0]
     try:
-        place_order(api, cfg, fqn, dc, dry_run=args.dry_run)
+        place_order(api, cfg, fqn, dc, plan_code=row.get("planCode"), dry_run=args.dry_run)
     except RuntimeError as e:
         sys.exit(str(e))
 

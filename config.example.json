@@ -1,16 +1,17 @@
 {
-  "plan_code": "REPLACE_ME (run: python3 sys3grabber.py find 2288G)",
+  "server": "24sys03",
+  "plan_code": "24sys032-v1",
   "endpoint": "ovh-eu",
   "subsidiary": "GB",
   "datacenters": ["lon"],
   "memory_contains": "32g",
-  "storage_contains": "960",
+  "storage_contains": "960ssd",
   "poll_seconds": 30,
   "os": "none_64.en",
   "region": "europe",
   "duration": "P1M",
   "option_keywords": [],
-  "max_price": 120,
+  "max_price": 180,
   "notify": {
     "ntfy": {"topic": "my-secret-topic-name"}
   }

@@ -39,6 +39,38 @@ def test_available_values_override():
     assert not g.is_available("72H", cfg)  # allowlist is now explicit
 
 
+def test_server_mode_matches_ssd_and_carries_plancode():
+    # server feed mixes plan codes; the SSD config lives under 24sys032-v1
+    server_rows = [
+        {"fqn": "24sys03-v1.ram-32g.softraid-2x960nvme", "memory": "ram-32g",
+         "storage": "softraid-2x960nvme", "planCode": "24sys03-v1",
+         "datacenters": [{"datacenter": "lon", "availability": "1H-high"}]},
+        {"fqn": "24sys032-v1.ram-32g.hardraid-4x960ssd", "memory": "ram-32g",
+         "storage": "hardraid-4x960ssd", "planCode": "24sys032-v1",
+         "datacenters": [{"datacenter": "lon", "availability": "1H-high"}]},
+    ]
+    cfg = {"memory_contains": "32g", "storage_contains": "960ssd", "datacenters": ["lon"]}
+    hits = g.find_available(server_rows, cfg)
+    assert len(hits) == 1
+    fqn, dc, av, row = hits[0]
+    assert row["planCode"] == "24sys032-v1"  # the plan an order must use
+
+
+def test_plan_code_filter_narrows_server_feed():
+    server_rows = [
+        {"fqn": "24sys03-v1.ram-32g.softraid-2x960nvme", "memory": "ram-32g",
+         "storage": "softraid-2x960nvme", "planCode": "24sys03-v1",
+         "datacenters": [{"datacenter": "lon", "availability": "1H-high"}]},
+        {"fqn": "24sys032-v1.ram-32g.softraid-2x960nvme", "memory": "ram-32g",
+         "storage": "softraid-2x960nvme", "planCode": "24sys032-v1",
+         "datacenters": [{"datacenter": "lon", "availability": "1H-high"}]},
+    ]
+    cfg = {"memory_contains": "32g", "storage_contains": "960", "datacenters": ["lon"],
+           "plan_code": "24sys032-v1"}
+    hits = g.find_available(server_rows, cfg)
+    assert [h[3]["planCode"] for h in hits] == ["24sys032-v1"]
+
+
 def test_order_lock():
     import tempfile
     with tempfile.TemporaryDirectory() as d:
