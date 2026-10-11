@@ -2,3 +2,5 @@ config.json
 .env
 __pycache__/
 .sys3grabber.ordered
+config.dryrun.json
+ovh.env
