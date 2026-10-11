@@ -3,7 +3,9 @@
   "plan_code": "24sys032-v1",
   "endpoint": "ovh-eu",
   "subsidiary": "GB",
-  "datacenters": ["lon"],
+  "datacenters": [
+    "lon"
+  ],
   "memory_contains": "32g",
   "storage_contains": "960ssd",
   "poll_seconds": 30,
@@ -13,6 +15,9 @@
   "option_keywords": [],
   "max_price": 180,
   "notify": {
-    "ntfy": {"topic": "my-secret-topic-name"}
-  }
+    "ntfy": {
+      "topic": "my-secret-topic-name"
+    }
+  },
+  "notify_repeat_seconds": 600
 }

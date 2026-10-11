@@ -61,6 +61,7 @@ def load_config(path):
     cfg.setdefault("duration", "P1M")
     cfg.setdefault("option_keywords", [])
     cfg.setdefault("notify", {})
+    cfg.setdefault("notify_repeat_seconds", 600)  # re-alert while in stock; 0 = once
     cfg.setdefault("max_price", None)
     cfg.setdefault("order_lock", ".sys3grabber.ordered")
     if not cfg.get("plan_code") and not cfg.get("server"):
@@ -286,6 +287,7 @@ def cmd_watch(args):
     target = cfg.get("server") or cfg.get("plan_code")
     print(f"watching {target} in {cfg['datacenters']} every {cfg['poll_seconds']}s "
           f"(auto-order: {'ON' if args.order else 'off'})", flush=True)
+    last_notify = 0
     while True:
         try:
             hits = find_available(fetch_availability(api, cfg), cfg)
@@ -294,8 +296,8 @@ def cmd_watch(args):
             hits = []
         if hits:
             fqn, dc, av, row = hits[0]
-            notify(cfg, f"SYS-3 IN STOCK: {fqn} @ {dc} ({av})")
             if args.order:
+                notify(cfg, f"SYS-3 IN STOCK: {fqn} @ {dc} ({av})")
                 # One checkout attempt per run, full stop. Whether it succeeds or
                 # raises, we never loop back and risk ordering the server twice;
                 # the lock file also blocks a re-order across restarts.
@@ -307,7 +309,15 @@ def cmd_watch(args):
                     notify(cfg, f"Order attempt stopped (NOT retrying): {e}")
                     return 1
             else:
-                return 0
+                # Notify-only: keep watching and re-notify every
+                # notify_repeat_seconds while it stays in stock (0 = once only).
+                now = time.time()
+                rpt = cfg["notify_repeat_seconds"]
+                if last_notify == 0 or (rpt and now - last_notify >= rpt):
+                    notify(cfg, f"SYS-3 IN STOCK: {fqn} @ {dc} ({av})")
+                    last_notify = now
+        else:
+            last_notify = 0  # reset so the next restock alerts immediately
         time.sleep(cfg["poll_seconds"])
 
 
