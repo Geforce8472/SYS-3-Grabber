@@ -95,6 +95,17 @@ def test_matrix_notifier(monkeypatch=None):
     assert "/_matrix/client/v3/rooms/%21a%3Ah/send/m.room.message/" in url
 
 
+def test_poll_states_records_flickers_and_absent_dcs():
+    rows = [{"fqn": "24sys03-v1.ram-32g.softraid-2x960nvme", "memory": "ram-32g",
+             "storage": "softraid-2x960nvme", "planCode": "24sys03-v1",
+             "datacenters": [{"datacenter": "lon", "availability": "comingSoon"},
+                             {"datacenter": "gra", "availability": "24H"}]}]
+    cfg = {"memory_contains": "32g", "storage_contains": "960", "datacenters": ["lon", "rbx"]}
+    # a value failing the in-stock allowlist is still recorded; a DC the feed
+    # never mentions shows as "absent"
+    assert g.poll_states(rows, cfg) == {"lon": "comingSoon", "rbx": "absent"}
+
+
 def test_order_lock():
     import tempfile
     with tempfile.TemporaryDirectory() as d:

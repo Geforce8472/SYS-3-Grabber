@@ -49,6 +49,14 @@ matches a known delivery-window value (`1H-high`, `24H`, `72H`, ...). Any unexpe
 is treated as *not* available, so it can never trigger an auto-order. Pin exact values with the
 `available_values` config key if OVH's reported values differ.
 
+### Per-poll logging
+Set `"log_polls": true` to print a timestamped line each poll with the raw availability
+each watched datacenter reports for the target config, e.g. `2026-10-12T11:14:58Z lon=unavailable`.
+This records values that *fail* the in-stock allowlist too (a brief flicker, a `comingSoon`,
+or `absent` when the feed omits the DC entirely), so over time `watch.log` becomes your own
+availability history for a config OVH exposes no history for. ~1 line/poll, so keep an eye on
+log size for very frequent polling.
+
 ## Notifications
 `notify` may hold any of `ntfy`, `discord`, `telegram`, `matrix` (all fire if present); messages also
 always print to stdout. Matrix sends to a room via the client-server API:

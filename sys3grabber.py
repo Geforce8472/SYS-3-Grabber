@@ -62,6 +62,7 @@ def load_config(path):
     cfg.setdefault("option_keywords", [])
     cfg.setdefault("notify", {})
     cfg.setdefault("notify_repeat_seconds", 600)  # re-alert while in stock; 0 = once
+    cfg.setdefault("log_polls", False)  # per-poll timestamped availability line to stdout
     cfg.setdefault("max_price", None)
     cfg.setdefault("order_lock", ".sys3grabber.ordered")
     if not cfg.get("plan_code") and not cfg.get("server"):
@@ -130,6 +131,28 @@ def find_available(rows, cfg):
             if dc["datacenter"] in cfg["datacenters"] and is_available(dc.get("availability"), cfg):
                 hits.append((fqn, dc["datacenter"], dc["availability"], row))
     return hits
+
+
+def poll_states(rows, cfg):
+    """Raw availability each watched DC reports for the target config, regardless
+    of the in-stock allowlist. Used for per-poll history logging, so a value that
+    fails is_available() (a flicker, a new status) is still recorded."""
+    states = {}
+    for row in rows:
+        fqn = row.get("fqn", "")
+        if cfg.get("plan_code") and row.get("planCode") and row["planCode"] != cfg["plan_code"]:
+            continue
+        if cfg["memory_contains"].lower() not in (row.get("memory") or fqn).lower():
+            continue
+        if cfg["storage_contains"].lower() not in (row.get("storage") or fqn).lower():
+            continue
+        for dc in row.get("datacenters", []):
+            if dc["datacenter"] in cfg["datacenters"]:
+                states[dc["datacenter"]] = dc.get("availability")
+    # Note DCs we're watching that the feed didn't mention at all.
+    for dc in cfg["datacenters"]:
+        states.setdefault(dc, "absent")
+    return states
 
 
 def fetch_availability(api, cfg):
@@ -305,7 +328,13 @@ def cmd_watch(args):
     last_notify = 0
     while True:
         try:
-            hits = find_available(fetch_availability(api, cfg), cfg)
+            rows = fetch_availability(api, cfg)
+            hits = find_available(rows, cfg)
+            if cfg["log_polls"]:
+                states = poll_states(rows, cfg)
+                stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                summary = " ".join(f"{dc}={states[dc]}" for dc in cfg["datacenters"])
+                print(f"{stamp} {summary}", flush=True)
         except Exception as e:
             print(f"poll error: {e}", file=sys.stderr)
             hits = []
