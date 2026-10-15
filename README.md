@@ -21,6 +21,8 @@ under a *different* plan code (`24sys032-v1`). So:
 - `memory_contains` / `storage_contains` then pick the exact config, e.g. `"32g"` + `"960ssd"` for
   32 GB with 4×960 GB SATA SSD. When an order fires, it uses the plan code of the matched row, so
   mixed-plan `server` feeds order the right product automatically.
+- `memory_contains` may also be a list, most-preferred first, e.g. `["32g", "64g"]`: either size
+  matches, and if both are in stock at once the earlier one is ordered.
 
 To find a box's `server` ref, run `check` with any config and look at an `fqn` (`<plan>.<ram>.<storage>`),
 or query `/dedicated/server/datacenter/availabilities` – the `server` field is the ref.

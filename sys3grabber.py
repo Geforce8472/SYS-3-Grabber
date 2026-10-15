@@ -114,44 +114,56 @@ def client_from_env(cfg):
 
 
 # ---------------------------------------------------------- availability
-def find_available(rows, cfg):
-    """Return [(fqn, datacenter, availability)] matching the config that are in stock."""
-    hits = []
+def _memory_wanted(cfg):
+    """memory_contains as a list, most-preferred first (a plain string is one entry)."""
+    m = cfg["memory_contains"]
+    return [m] if isinstance(m, str) else list(m)
+
+
+def _matching_rows(rows, cfg):
+    """Yield (rank, memory_key, row) for rows matching the configured target, where
+    rank is the row's position in memory_contains (0 = most preferred)."""
+    wanted = _memory_wanted(cfg)
     for row in rows:
         fqn = row.get("fqn", "")
         # In server mode the feed carries several plan codes (e.g. 24sys03-v1 and
         # the SSD-bearing 24sys032-v1); if plan_code is set, narrow to it.
         if cfg.get("plan_code") and row.get("planCode") and row["planCode"] != cfg["plan_code"]:
             continue
-        if cfg["memory_contains"].lower() not in (row.get("memory") or fqn).lower():
-            continue
         if cfg["storage_contains"].lower() not in (row.get("storage") or fqn).lower():
             continue
+        mem = (row.get("memory") or fqn).lower()
+        rank = next((i for i, w in enumerate(wanted) if w.lower() in mem), None)
+        if rank is not None:
+            yield rank, wanted[rank], row
+
+
+def find_available(rows, cfg):
+    """Return [(fqn, datacenter, availability, row)] matching the config that are in
+    stock, most-preferred memory first, so hits[0] is the one to order."""
+    hits = []
+    for rank, _, row in _matching_rows(rows, cfg):
         for dc in row.get("datacenters", []):
             if dc["datacenter"] in cfg["datacenters"] and is_available(dc.get("availability"), cfg):
-                hits.append((fqn, dc["datacenter"], dc["availability"], row))
-    return hits
+                hits.append((rank, (row.get("fqn", ""), dc["datacenter"], dc["availability"], row)))
+    return [h for _, h in sorted(hits, key=lambda h: h[0])]
 
 
 def poll_states(rows, cfg):
     """Raw availability each watched DC reports for the target config, regardless
     of the in-stock allowlist. Used for per-poll history logging, so a value that
-    fails is_available() (a flicker, a new status) is still recorded."""
+    fails is_available() (a flicker, a new status) is still recorded. Keys are the
+    DC name, or "dc/memory" when watching several memory sizes."""
+    multi = len(_memory_wanted(cfg)) > 1
     states = {}
-    for row in rows:
-        fqn = row.get("fqn", "")
-        if cfg.get("plan_code") and row.get("planCode") and row["planCode"] != cfg["plan_code"]:
-            continue
-        if cfg["memory_contains"].lower() not in (row.get("memory") or fqn).lower():
-            continue
-        if cfg["storage_contains"].lower() not in (row.get("storage") or fqn).lower():
-            continue
+    for _, mem, row in _matching_rows(rows, cfg):
         for dc in row.get("datacenters", []):
             if dc["datacenter"] in cfg["datacenters"]:
-                states[dc["datacenter"]] = dc.get("availability")
-    # Note DCs we're watching that the feed didn't mention at all.
+                states[f"{dc['datacenter']}/{mem}" if multi else dc["datacenter"]] = dc.get("availability")
+    # Note targets we're watching that the feed didn't mention at all.
     for dc in cfg["datacenters"]:
-        states.setdefault(dc, "absent")
+        for mem in _memory_wanted(cfg):
+            states.setdefault(f"{dc}/{mem}" if multi else dc, "absent")
     return states
 
 
@@ -333,7 +345,7 @@ def cmd_watch(args):
             if cfg["log_polls"]:
                 states = poll_states(rows, cfg)
                 stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                summary = " ".join(f"{dc}={states[dc]}" for dc in cfg["datacenters"])
+                summary = " ".join(f"{k}={v}" for k, v in sorted(states.items()))
                 print(f"{stamp} {summary}", flush=True)
         except Exception as e:
             print(f"poll error: {e}", file=sys.stderr)
